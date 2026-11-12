@@ -1,0 +1,10 @@
+services:
+  olympic-games-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: olympic-participation-tracker:latest
+    container_name: olympic-participation-tracker
+    ports:
+      - "80:80"
+    restart: unless-stopped

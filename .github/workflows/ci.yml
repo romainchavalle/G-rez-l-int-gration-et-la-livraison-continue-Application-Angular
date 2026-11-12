@@ -1,0 +1,112 @@
+name: CI/CD Generic Pipeline
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+env:
+  REGISTRY: ghcr.io
+  NODE_VERSION: '20'
+  JAVA_VERSION: '21'
+
+jobs:
+  # =========================================================================
+  # STEP 2: GENERIC TEST JOB (Automatically adapts to Angular or Java)
+  # =========================================================================
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect project type
+        id: detect
+        run: |
+          if [ -f "package.json" ]; then
+            echo "type=angular" >> $GITHUB_OUTPUT
+          elif [ -f "build.gradle" ]; then
+            echo "type=java" >> $GITHUB_OUTPUT
+          else
+            echo "Unsupported project type" && exit 1
+          fi
+
+      - name: Set up Node.js (Angular)
+        if: steps.detect.outputs.type == 'angular'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Set up JDK 21 (Java)
+        if: steps.detect.outputs.type == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'gradle'
+
+      - name: Execute unified test script
+        run: |
+          sed -i 's/\r$//' ./run-tests.sh
+          chmod +x ./run-tests.sh
+          ./run-tests.sh
+
+      - name: Publish JUnit Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Unit Test Results (${{ steps.detect.outputs.type }})
+          path: test-results/*.xml
+          reporter: java-junit
+
+      - name: Upload Test Results Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-test-results
+          path: test-results/*.xml
+
+  # =========================================================================
+  # STEP 3: DOCKER BUILD & PUSH TO GITHUB CONTAINER REGISTRY
+  # =========================================================================
+  build:
+    name: Build and Push Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry (ghcr.io)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Docker image tag (branch-sha)
+        id: meta
+        run: |
+          IMAGE_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          BRANCH_NAME=$(echo "${{ github.ref_name }}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "image_tag=${{ env.REGISTRY }}/${IMAGE_NAME}:${BRANCH_NAME}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "image_latest=${{ env.REGISTRY }}/${IMAGE_NAME}:latest" >> $GITHUB_OUTPUT
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_tag }}
+            ${{ steps.meta.outputs.image_latest }}

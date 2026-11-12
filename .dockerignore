@@ -1,0 +1,12 @@
+node_modules
+dist
+.angular
+.git
+.gitignore
+.npm
+reports
+test-results
+coverage
+README.md
+docker-compose.yml
+Dockerfile
